@@ -659,7 +659,7 @@ const NotesPopup = ({item,onClose,onSave,onTogglePaid,onAdjustBudget,wallets,isM
                       const shortfall = Math.max(0, num(n.totalUtang)-cic.filter(c=>c.paid||c.lockedPaid).reduce((s,c)=>s+num(c.amount),0));
                       const allSlotsSettled = cic.length>0 && cic.every(c=>c.paid||c.lockedPaid);
                       return (allSlotsSettled && shortfall>0) ? (
-                        <div style={{fontSize:9,color:C.danger,marginTop:2}}>*Masih kurang {fmt(shortfall)}. Uncheck dulu, lalu tambah bulan buat nutup sisanya.</div>
+                        <div style={{fontSize:9,color:C.danger,marginTop:2}}>*Pembayaran kurang {fmt(shortfall)}. Uncheck, tambah bulan untuk menyesuaikan.</div>
                       ) : null;
                     })()}
                   </div>
@@ -747,7 +747,7 @@ const NotesPopup = ({item,onClose,onSave,onTogglePaid,onAdjustBudget,wallets,isM
                       const shortfall = Math.max(0, num(n.totalUtang)-cic.filter(c=>c.paid||c.lockedPaid).reduce((s,c)=>s+num(c.amount),0));
                       const allSlotsSettled = cic.length>0 && cic.every(c=>c.paid||c.lockedPaid);
                       return (allSlotsSettled && shortfall>0) ? (
-                        <div style={{fontSize:9,color:C.danger,marginTop:2}}>*Masih kurang {fmt(shortfall)}. Uncheck dulu, lalu tambah bulan buat nutup sisanya.</div>
+                        <div style={{fontSize:9,color:C.danger,marginTop:2}}>*Pembayaran kurang {fmt(shortfall)}. Uncheck, tambah bulan untuk menyesuaikan.</div>
                       ) : null;
                     })()}
                   </div>
@@ -1057,9 +1057,47 @@ const QuickInput = ({wallets, kategoriList, onOut, onIn, onTransfer, isMobile, d
 };
 
 // ---------------------------------------------
+// CONNECT TO WALLET PANEL (declare existing savings, no money movement)
+// ---------------------------------------------
+const ConnectPanel = ({goal, wallets, goals, onConnect}) => {
+  const w = (wallets||[]).find(x=>x.name===goal.walletPenyimpanan);
+  const walletAmount = num(w?.amount);
+  const allocatedOthers = (goals||[]).filter(x=>x.walletPenyimpanan===goal.walletPenyimpanan && x.id!==goal.id).reduce((s,x)=>s+num(x.saved),0);
+  const sisa = Math.max(0, walletAmount - allocatedOthers);
+  const [amount, setAmount] = useState(toRp(sisa));
+  const [done, setDone] = useState(false);
+  const inputNum = num(amount);
+  const over = inputNum > sisa;
+  const submit = () => {
+    if (!amount || over) return;
+    onConnect({goalId:goal.id, amount, wallet:goal.walletPenyimpanan});
+    setDone(true); setTimeout(()=>setDone(false),1200);
+  };
+  return (
+    <div style={{marginTop:10,background:C.soft,borderRadius:10,padding:14,border:`1px solid ${C.border}`}}>
+      <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Saldo {goal.walletPenyimpanan}: <strong style={{color:C.text}}>{fmt(walletAmount)}</strong></div>
+      {allocatedOthers>0 && <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Sudah dialokasikan untuk target lain: <strong style={{color:C.text}}>{fmt(allocatedOthers)}</strong></div>}
+      <div style={{fontSize:11,color:C.muted,marginBottom:10}}>Sisa yang dapat dialokasikan: <strong style={{color:C.text}}>{fmt(sisa)}</strong></div>
+      <Lbl>Nominal untuk target ini</Lbl>
+      <RpInput value={amount} onChange={setAmount}/>
+      {over && (
+        <div style={{marginTop:8,fontSize:11,color:C.danger,background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:4,padding:"6px 10px"}}>
+          Melebihi sisa yang dapat dialokasikan sebesar {fmt(inputNum-sisa)}.
+        </div>
+      )}
+      <div style={{display:"flex",justifyContent:"flex-end",marginTop:10}}>
+        <Btn color={done?C.green:over?C.danger:C.red} onClick={over?undefined:submit} style={over?{cursor:"not-allowed",opacity:0.55}:{}}>
+          {done?"Tersimpan":"Connect ke Wallet"}
+        </Btn>
+      </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------
 // SAVINGS TAB
 // ---------------------------------------------
-const SavingsTab = ({goals, wallets, isMobile, onAdd, onDel, onUpd, onDeposit, onWithdrawW, onWithdrawU}) => {
+const SavingsTab = ({goals, wallets, isMobile, onAdd, onDel, onUpd, onDeposit, onWithdrawW, onWithdrawU, onConnect}) => {
   const [actionFor, setActionFor] = useState(null);
   const [amount, setAmount] = useState("");
   const [wallet, setWallet] = useState("");
@@ -1067,6 +1105,9 @@ const SavingsTab = ({goals, wallets, isMobile, onAdd, onDel, onUpd, onDeposit, o
   const [note, setNote] = useState("");
   const [done, setDone] = useState(false);
   const [expandedFor, setExpandedFor] = useState(null); // goalId yang lagi nampilin 3 button aksi
+  const [search, setSearch] = useState("");
+  const [showSearchDrop, setShowSearchDrop] = useState(false);
+  const searchMatches = (goals||[]).filter(g => (g.nama||"").toLowerCase().includes(search.toLowerCase()));
   const toggleExpand = (goalId) => {
     setExpandedFor(prev => {
       if (prev===goalId) { setActionFor(af=>af?.goalId===goalId?null:af); return null; }
@@ -1100,8 +1141,33 @@ const SavingsTab = ({goals, wallets, isMobile, onAdd, onDel, onUpd, onDeposit, o
 
   return (
     <div>
-      {goals.map(g => {
-        const pct = num(g.target)>0 ? Math.min((num(g.saved)/num(g.target))*100,100) : 0;
+      <div style={{marginBottom:12,position:"relative"}}>
+        <input value={search}
+          onChange={e=>{setSearch(e.target.value);setShowSearchDrop(true);}}
+          onFocus={()=>setShowSearchDrop(true)}
+          onBlur={()=>setTimeout(()=>setShowSearchDrop(false),200)}
+          placeholder="Cari Saving..."
+          style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:4,padding:"9px 14px",fontSize:13,fontFamily:"inherit",background:C.card,boxSizing:"border-box",outline:"none"}}/>
+        {search && <button onClick={()=>setSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",padding:0,cursor:"pointer",display:"flex",alignItems:"center"}}><svg width="10" height="13" viewBox="0 0 10 13" fill="none" xmlns="http://www.w3.org/2000/svg"><polygon points="1,2 9,2 8,12 2,12" stroke="#E5E7EB" strokeWidth="1.2" fill="none" strokeLinejoin="round"/><line x1="0" y1="2" x2="10" y2="2" stroke="#E5E7EB" strokeWidth="1.2" strokeLinecap="round"/><line x1="3" y1="4.5" x2="3" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="5" y1="4.5" x2="5" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="7" y1="4.5" x2="7" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/></svg></button>}
+        {showSearchDrop && searchMatches.length>0 && (
+          <div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,zIndex:50,boxShadow:"0 4px 12px rgba(0,0,0,0.15)",maxHeight:160,overflowY:"auto",marginTop:2}}>
+            {searchMatches.map(g=>(
+              <div key={g.id}
+                onMouseDown={e=>{e.preventDefault();setSearch(g.nama||"");setShowSearchDrop(false);}}
+                style={{padding:"8px 12px",fontSize:12,cursor:"pointer",borderBottom:`1px solid ${C.light}`,userSelect:"none"}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.soft}
+                onMouseLeave={e=>e.currentTarget.style.background="#fff"}>
+                {g.nama||"(tanpa nama)"}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {search && searchMatches.length===0 && (
+        <div style={{padding:"14px 0",textAlign:"center",color:C.muted,fontSize:12}}>Tidak ada saving yang cocok dengan pencarian.</div>
+      )}
+      {searchMatches.map(g => {
+        const pct = num(g.target)>0 ? (num(g.saved)/num(g.target))*100 : 0;
         const isOpen = actionFor?.goalId===g.id;
         const expanded = expandedFor===g.id || isOpen;
         return (
@@ -1141,9 +1207,12 @@ const SavingsTab = ({goals, wallets, isMobile, onAdd, onDel, onUpd, onDeposit, o
                   : <Sel value={g.walletPenyimpanan||""} onChange={v=>onUpd(g.id,"walletPenyimpanan",v)}
                       options={[["","Pilih wallet..."],...(wallets||[]).filter(w=>!w.isMain).map(w=>w.name)]}/>
                 }
+                {!g.walletLocked && g.walletPenyimpanan && (
+                  <ConnectPanel key={g.id+"-"+g.walletPenyimpanan} goal={g} wallets={wallets} goals={goals} onConnect={onConnect}/>
+                )}
               </div>
-              <div style={{background:C.soft,borderRadius:6,height:4,overflow:"hidden",marginTop:8,marginBottom:12}}>
-                <div style={{width:`${pct}%`,background:C.red,height:"100%",borderRadius:6,transition:"width 0.4s"}}/>
+              <div style={{background:C.soft,borderRadius:6,height:4,marginTop:8,marginBottom:12}}>
+                <div style={{width:`${Math.max(pct,0)}%`,background:C.red,height:"100%",borderRadius:6,transition:"width 0.4s"}}/>
               </div>
               <div onClick={()=>toggleExpand(g.id)} className="m2os-note-row" style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:expanded?12:0,cursor:"pointer",width:"100%"}}>
                 <span style={{fontSize:11,color:C.muted,lineHeight:1}}>{pct.toFixed(0)}% tercapai</span>
@@ -1198,8 +1267,8 @@ const SavingsTab = ({goals, wallets, isMobile, onAdd, onDel, onUpd, onDeposit, o
                   <Lbl>Riwayat</Lbl>
                   {g.log.slice(0,4).map((l,i)=>(
                     <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"4px 0",color:C.muted}}>
-                      <span>{l.type==="deposit"?"Setor":l.type==="withdraw_wallet"?"Tarik ke wallet":"Ambil urgent"}{l.date?` · ${isoToDisplay(l.date)}`:""}{l.note?` · ${l.note}`:""}</span>
-                      <span style={{fontWeight:700,color:l.type==="deposit"?C.green:C.danger}}>{l.type==="deposit"?"+":"-"}{fmt(num(l.amount))}</span>
+                      <span>{l.type==="deposit"?"Setor":l.type==="withdraw_wallet"?"Tarik ke wallet":l.type==="connect"?`Saldo Awal · ${l.wallet||""}`:"Ambil urgent"}{l.date?` · ${isoToDisplay(l.date)}`:""}{l.note?` · ${l.note}`:""}</span>
+                      <span style={{fontWeight:700,color:l.type==="deposit"?C.green:l.type==="connect"?C.text:C.danger}}>{l.type==="deposit"?"+":l.type==="connect"?"":"-"}{fmt(num(l.amount))}</span>
                     </div>
                   ))}
                 </div>
@@ -1429,6 +1498,7 @@ export default function App() {
   const [quickAction, setQuickAction] = useState(""); // "saldo" | "effective" | "wallet" | "savings"
   const [search, setSearch] = useState("");
   const [logFilter, setLogFilter] = useState("all"); // all | out | in | transfer | void
+  const [walletExpanded, setWalletExpanded] = useState({}); // {walletName: bool} - toggle rincian "Dialokasikan untuk"
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [showNew, setShowNew] = useState(false);
@@ -1649,7 +1719,7 @@ export default function App() {
     if (dateFrom) logs=logs.filter(l=>l.date&&l.date>=dateFrom);
     if (dateTo) logs=logs.filter(l=>l.date&&l.date<=dateTo);
     if (logFilter!=="all") {
-      if (logFilter==="savings_deposit") logs=logs.filter(l=>l.type==="savings_deposit"||l.type==="savings_withdraw"||l.type==="savings_withdraw_urgent");
+      if (logFilter==="savings_deposit") logs=logs.filter(l=>l.type==="savings_deposit"||l.type==="savings_withdraw"||l.type==="savings_withdraw_urgent"||l.type==="savings_connect");
       else if (logFilter==="in") logs=logs.filter(l=>l.type==="in"||l.type==="side_income");
       else if (logFilter==="out") {
         // Exclude entri out yang sudah di-void (ada pasangan void dengan desc+rowDesc yang sama)
@@ -2081,6 +2151,13 @@ export default function App() {
     }
     // Catat ke budget log
     setBudget(b=>({...b,log:[{type:"savings_withdraw",from:walletPenyimpanan||"savings",to:wallet,goalNama:goal?.nama||"",amount,date,note,ts:Date.now()},...(b.log||[])]}));
+  };
+  const goalConnect = ({goalId,amount,wallet}) => {
+    // Deklarasi tabungan yang sudah ada di wallet - TIDAK memindahkan saldo apapun
+    // (tidak ada setWallets di sini), dan sengaja tidak masuk hitungan savingsNet.
+    const goal = goals.find(g=>g.id===goalId);
+    setGoals(g=>g.map(x=>x.id===goalId?{...x,saved:toRp(num(amount)),log:[{type:"connect",amount,wallet,ts:Date.now()},...(x.log||[])]}:x));
+    setBudget(b=>({...b,log:[{type:"savings_connect",wallet,goalNama:goal?.nama||"",amount,ts:Date.now()},...(b.log||[])]}));
   };
   const goalWithdrawU = ({goalId,amount,date,note}) => {
     const goal = goals.find(g=>g.id===goalId);
@@ -3130,19 +3207,85 @@ export default function App() {
                 {regularWallets.length===0 && (
                   <div style={{padding:"8px 16px 12px",fontSize:12,color:C.muted}}>Belum ada wallet operasional. Tambah wallet harian seperti BCA, GoPay, atau Cash.</div>
                 )}
-                {wallets.map((w,i)=>w.isMain?null: isMobile ? (
-                  <div key={i} style={{display:"flex",alignItems:"center",gap:11,padding:"10px 11px 10px 14px",borderBottom:`1px solid ${C.light}`,background:"#fff"}} className="m2os-note-row">
-                    <TxtInput value={w.name} onChange={v=>updW(i,"name",v)} style={{fontWeight:600,fontSize:13,flex:1}}/>
-                    <RpInput value={w.amount} onChange={v=>updW(i,"amount",v)} style={{fontWeight:700,fontSize:13,flex:1}}/>
-                    <button onClick={()=>setWallets(ws=>ws.filter((_,j)=>j!==i))} className="m2os-note-del" style={{background:"none",border:"none",cursor:"pointer",padding:0,opacity:0.25,display:"flex",alignItems:"center",justifySelf:"center"}}><svg width="10" height="13" viewBox="0 0 10 13" fill="none" xmlns="http://www.w3.org/2000/svg"><polygon points="1,2 9,2 8,12 2,12" stroke="#E5E7EB" strokeWidth="1.2" fill="none" strokeLinejoin="round"/><line x1="0" y1="2" x2="10" y2="2" stroke="#E5E7EB" strokeWidth="1.2" strokeLinecap="round"/><line x1="3" y1="4.5" x2="3" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="5" y1="4.5" x2="5" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="7" y1="4.5" x2="7" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/></svg></button>
+                {wallets.map((w,i)=>{
+                  if (w.isMain) return null;
+                  const allocGoals = (goals||[]).filter(g=>g.walletPenyimpanan===w.name);
+                  const totalAlloc = allocGoals.reduce((s,g)=>s+num(g.saved),0);
+                  const sisaAlloc = num(w.amount) - totalAlloc;
+                  const rincianOpen = !!walletExpanded[w.name];
+                  return (
+                  <div key={i} style={{borderBottom:`1px solid ${C.light}`,background:"#fff"}} className="m2os-note-row">
+                    {isMobile ? (
+                      <div style={{display:"flex",alignItems:"center",gap:11,padding:"10px 11px 10px 14px"}}>
+                        <TxtInput value={w.name} onChange={v=>updW(i,"name",v)} style={{fontWeight:600,fontSize:13,flex:1,minWidth:0}}/>
+                        <RpInput value={w.amount} onChange={v=>updW(i,"amount",v)} style={{fontWeight:700,fontSize:13,flex:"0 0 auto",width:"11em",minWidth:0,padding:"7px 4px"}}/>
+                        <button onClick={()=>setWallets(ws=>ws.filter((_,j)=>j!==i))} className="m2os-note-del" style={{background:"none",border:"none",cursor:"pointer",padding:0,opacity:0.25,display:"flex",alignItems:"center",justifySelf:"center"}}><svg width="10" height="13" viewBox="0 0 10 13" fill="none" xmlns="http://www.w3.org/2000/svg"><polygon points="1,2 9,2 8,12 2,12" stroke="#E5E7EB" strokeWidth="1.2" fill="none" strokeLinejoin="round"/><line x1="0" y1="2" x2="10" y2="2" stroke="#E5E7EB" strokeWidth="1.2" strokeLinecap="round"/><line x1="3" y1="4.5" x2="3" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="5" y1="4.5" x2="5" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="7" y1="4.5" x2="7" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/></svg></button>
+                      </div>
+                    ) : (
+                      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 32px",gap:8,padding:"8px 8px 8px 16px",alignItems:"center"}}>
+                        <TxtInput value={w.name} onChange={v=>updW(i,"name",v)} style={{border:"none",background:"transparent",fontWeight:600,fontSize:13,padding:"2px"}}/>
+                        <RpInput value={w.amount} onChange={v=>updW(i,"amount",v)} style={{fontWeight:700,background:"transparent",border:"none",fontSize:13}}/>
+                        <button onClick={()=>setWallets(ws=>ws.filter((_,j)=>j!==i))} className="m2os-note-del" style={{background:"none",border:"none",cursor:"pointer",padding:0,opacity:0.25,display:"flex",alignItems:"center",justifySelf:"center"}}><svg width="10" height="13" viewBox="0 0 10 13" fill="none" xmlns="http://www.w3.org/2000/svg"><polygon points="1,2 9,2 8,12 2,12" stroke="#E5E7EB" strokeWidth="1.2" fill="none" strokeLinejoin="round"/><line x1="0" y1="2" x2="10" y2="2" stroke="#E5E7EB" strokeWidth="1.2" strokeLinecap="round"/><line x1="3" y1="4.5" x2="3" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="5" y1="4.5" x2="5" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="7" y1="4.5" x2="7" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/></svg></button>
+                      </div>
+                    )}
+                    {allocGoals.length>0 && (
+                      <div style={{padding:isMobile?"0 11px 8px 14px":"0 8px 8px 16px"}}>
+                        {isMobile ? (
+                          <div onClick={()=>setWalletExpanded(x=>({...x,[w.name]:!x[w.name]}))} style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",width:"100%"}}>
+                            <span style={{fontSize:10,color:C.muted,fontWeight:600}}>Dialokasikan untuk:</span>
+                            <svg className="m2os-note-del" width="10" height="3" viewBox="0 0 10 3" style={{flexShrink:0,display:"block",opacity:0,transition:"opacity 0.15s"}}>
+                              <circle cx="1.5" cy="1.5" r="1" fill={C.faint}/>
+                              <circle cx="5" cy="1.5" r="1" fill={C.faint}/>
+                              <circle cx="8.5" cy="1.5" r="1" fill={C.faint}/>
+                            </svg>
+                          </div>
+                        ) : (
+                          <div onClick={()=>setWalletExpanded(x=>({...x,[w.name]:!x[w.name]}))} style={{display:"grid",gridTemplateColumns:"2fr 1fr 32px",gap:8,alignItems:"center",cursor:"pointer"}}>
+                            <span style={{fontSize:10,color:C.muted,fontWeight:600,gridColumn:"1"}}>Dialokasikan untuk:</span>
+                            <svg className="m2os-note-del" width="10" height="3" viewBox="0 0 10 3" style={{gridColumn:"3",justifySelf:"center",display:"block",opacity:0,transition:"opacity 0.15s"}}>
+                              <circle cx="1.5" cy="1.5" r="1" fill={C.faint}/>
+                              <circle cx="5" cy="1.5" r="1" fill={C.faint}/>
+                              <circle cx="8.5" cy="1.5" r="1" fill={C.faint}/>
+                            </svg>
+                          </div>
+                        )}
+                        {rincianOpen && isMobile && (
+                          <div style={{paddingLeft:2}}>
+                            {allocGoals.map(g=>(
+                              <div key={g.id} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"3px 0",color:C.muted}}>
+                                <span>{g.nama||"(tanpa nama)"}</span>
+                                <span style={{fontWeight:600,color:C.text}}>{fmt(num(g.saved))}</span>
+                              </div>
+                            ))}
+                            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"4px 0",borderTop:`1px solid ${C.light}`,marginTop:4,fontWeight:700}}>
+                              <span>Total Teralokasi</span><span>{fmt(totalAlloc)}</span>
+                            </div>
+                            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"2px 0",fontWeight:700,color:sisaAlloc<0?C.danger:C.muted}}>
+                              <span>{sisaAlloc<0?"Kelebihan Teralokasi":"Sisa Belum Teralokasi"}</span><span>{fmt(Math.abs(sisaAlloc))}</span>
+                            </div>
+                          </div>
+                        )}
+                        {rincianOpen && !isMobile && (
+                          <div style={{paddingLeft:2,paddingRight:11}}>
+                            {allocGoals.map(g=>(
+                              <div key={g.id} style={{display:"grid",gridTemplateColumns:"2fr 1fr 32px",gap:8,fontSize:11,padding:"3px 0",color:C.muted}}>
+                                <span style={{gridColumn:"1"}}>{g.nama||"(tanpa nama)"}</span>
+                                <span style={{gridColumn:"2 / 4",textAlign:"right",fontWeight:600,color:C.text}}>{fmt(num(g.saved))}</span>
+                              </div>
+                            ))}
+                            <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 32px",gap:8,fontSize:11,padding:"4px 0",borderTop:`1px solid ${C.light}`,marginTop:4,fontWeight:700}}>
+                              <span style={{gridColumn:"1"}}>Total Teralokasi</span><span style={{gridColumn:"2 / 4",textAlign:"right"}}>{fmt(totalAlloc)}</span>
+                            </div>
+                            <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 32px",gap:8,fontSize:11,padding:"2px 0",fontWeight:700,color:sisaAlloc<0?C.danger:C.muted}}>
+                              <span style={{gridColumn:"1"}}>{sisaAlloc<0?"Kelebihan Teralokasi":"Sisa Belum Teralokasi"}</span><span style={{gridColumn:"2 / 4",textAlign:"right"}}>{fmt(Math.abs(sisaAlloc))}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div key={i} style={{display:"grid",gridTemplateColumns:"2fr 1fr 32px",gap:8,padding:"8px 8px 8px 16px",borderBottom:`1px solid ${C.light}`,alignItems:"center",background:"#fff"}} className="m2os-note-row">
-                    <TxtInput value={w.name} onChange={v=>updW(i,"name",v)} style={{border:"none",background:"transparent",fontWeight:600,fontSize:13,padding:"2px"}}/>
-                    <RpInput value={w.amount} onChange={v=>updW(i,"amount",v)} style={{fontWeight:700,background:"transparent",border:"none",fontSize:13}}/>
-                    <button onClick={()=>setWallets(ws=>ws.filter((_,j)=>j!==i))} className="m2os-note-del" style={{background:"none",border:"none",cursor:"pointer",padding:0,opacity:0.25,display:"flex",alignItems:"center",justifySelf:"center"}}><svg width="10" height="13" viewBox="0 0 10 13" fill="none" xmlns="http://www.w3.org/2000/svg"><polygon points="1,2 9,2 8,12 2,12" stroke="#E5E7EB" strokeWidth="1.2" fill="none" strokeLinejoin="round"/><line x1="0" y1="2" x2="10" y2="2" stroke="#E5E7EB" strokeWidth="1.2" strokeLinecap="round"/><line x1="3" y1="4.5" x2="3" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="5" y1="4.5" x2="5" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="7" y1="4.5" x2="7" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/></svg></button>
-                  </div>
-                ))}
+                  );
+                })}
                 <div style={{padding:"8px 16px"}}>
                   <button onClick={()=>setWallets(w=>[...w,{name:"Wallet Baru",amount:"",isMain:false}])} style={{background:"none",border:"none",padding:"4px 0",fontSize:11,fontWeight:400,fontFamily:"inherit",color:C.faint,cursor:"pointer"}}>+ tambah wallet</button>
                 </div>
@@ -3174,7 +3317,7 @@ export default function App() {
         {tab==="savings" && (
           <SavingsTab goals={goals} wallets={wallets} isMobile={isMobile}
             onAdd={addGoal} onDel={delGoal} onUpd={updGoal}
-            onDeposit={goalDeposit} onWithdrawW={goalWithdrawW} onWithdrawU={goalWithdrawU}/>
+            onDeposit={goalDeposit} onWithdrawW={goalWithdrawW} onWithdrawU={goalWithdrawU} onConnect={goalConnect}/>
         )}
 
         {/* -- LOG -- */}
@@ -3186,9 +3329,9 @@ export default function App() {
           <div>
             {/* Search */}
             <div style={{marginBottom:8,position:"relative"}}>
-              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari transaksi, kategori..."
-                style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 14px",fontSize:13,fontFamily:"inherit",background:C.card,boxSizing:"border-box",outline:"none"}}/>
-              {search&&<button onClick={()=>setSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:15}}>x</button>}
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari Activity..."
+                style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:4,padding:"9px 14px",fontSize:13,fontFamily:"inherit",background:C.card,boxSizing:"border-box",outline:"none"}}/>
+              {search&&<button onClick={()=>setSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",padding:0,cursor:"pointer",display:"flex",alignItems:"center"}}><svg width="10" height="13" viewBox="0 0 10 13" fill="none" xmlns="http://www.w3.org/2000/svg"><polygon points="1,2 9,2 8,12 2,12" stroke="#E5E7EB" strokeWidth="1.2" fill="none" strokeLinejoin="round"/><line x1="0" y1="2" x2="10" y2="2" stroke="#E5E7EB" strokeWidth="1.2" strokeLinecap="round"/><line x1="3" y1="4.5" x2="3" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="5" y1="4.5" x2="5" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/><line x1="7" y1="4.5" x2="7" y2="10" stroke="#E5E7EB" strokeWidth="1.0" strokeLinecap="round"/></svg></button>}
             </div>
 
             {/* Filter tipe */}
@@ -3211,18 +3354,21 @@ export default function App() {
               {(dateFrom||dateTo)&&<button onClick={()=>{setDateFrom("");setDateTo("");}} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>Reset</button>}
             </div>
 
-            {/* Summary */}
+            {/* Summary - format persis sama kayak compact financial rows di Overview (Sisa Saldo/Total Spending/dst) */}
             {(dateFrom||dateTo||search) && filteredLog.length>0 && (
-              <div style={{display:"flex",gap:8,marginBottom:12}}>
-                <Card style={{flex:1,padding:"10px 14px"}}>
-                  <Lbl>Pengeluaran</Lbl>
-                  <div style={{fontSize:15,fontWeight:700,color:C.danger}}>{fmt(totalOut)}</div>
-                </Card>
-                <Card style={{flex:1,padding:"10px 14px"}}>
-                  <Lbl>Pemasukan</Lbl>
-                  <div style={{fontSize:15,fontWeight:700,color:C.green}}>{fmt(totalIn)}</div>
-                </Card>
-              </div>
+              <Card style={{padding:"6px 0",marginBottom:12}}>
+                {[
+                  ["Pengeluaran", fmt(totalOut), C.danger],
+                  ["Pemasukan", fmt(totalIn), C.green],
+                ].map(([l,v,col],i,arr)=>(
+                  <div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                    padding:"10px 16px",
+                    borderBottom:i<arr.length-1?`1px solid ${C.light}`:"none"}}>
+                    <span style={{fontSize:11,color:C.muted,fontWeight:400}}>{l}</span>
+                    <span style={{fontSize:12,fontWeight:500,color:col}}>{v}</span>
+                  </div>
+                ))}
+              </Card>
             )}
 
             {/* Breakdown per kategori */}
@@ -3246,6 +3392,7 @@ export default function App() {
                       {l.type==="transfer"?`${l.from} -> ${l.to}`:
                        l.type==="savings_deposit"?`Setor    .    ${l.goalNama||"Savings"}`:
                        l.type==="savings_withdraw"?`Tarik    .    ${l.goalNama||"Savings"}`:l.type==="savings_withdraw_urgent"?`Ambil Urgent    .    ${l.goalNama||"Savings"}`:
+                       l.type==="savings_connect"?`Saldo Awal    .    ${l.goalNama||"Savings"}`:
                        (l.rowDesc||l.desc||"(tanpa nama)")}
                     </div>
                     <div style={{fontSize:10,color:C.muted}}>
@@ -3255,6 +3402,7 @@ export default function App() {
                       {l.type==="transfer" && [l.note, l.date?isoToDisplay(l.date):""].filter(Boolean).join("    .    ")}
                       {l.type==="savings_deposit" && [l.from+" -> "+(l.to||"savings"), l.date?isoToDisplay(l.date):""].filter(Boolean).join("    .    ")}
                       {(l.type==="savings_withdraw"||l.type==="savings_withdraw_urgent") && [(l.from||"savings")+(l.type==="savings_withdraw_urgent"?" (urgent)":l.to?" -> "+l.to:""), l.date?isoToDisplay(l.date):""].filter(Boolean).join("    .    ")}
+                      {l.type==="savings_connect" && (l.wallet||"savings")}
                       {(l.type==="out"||l.type==="void"||l.type==="in"||l.type==="side_income") && ("  "+(l.date?isoToDisplay(l.date):""))}
                     </div>
                   </div>
@@ -3262,10 +3410,12 @@ export default function App() {
                     <div style={{fontWeight:700,fontSize:13,color:
                       l.type==="in"||l.type==="side_income"||l.type==="savings_withdraw"?C.green:l.type==="savings_withdraw_urgent"?C.danger:
                       l.type==="void"?(l.isPiutang?C.danger:C.green):
+                      l.type==="savings_connect"?C.text:
                       l.type==="out"||l.type==="savings_deposit"?C.danger:C.text}}>
                       {l.type==="in"||l.type==="side_income"||l.type==="savings_withdraw"?"+":
                        l.type==="void"?(l.isPiutang?"-":"+"):
                        l.type==="savings_withdraw_urgent"?"-":
+                       l.type==="savings_connect"?"":
                        l.type==="out"||l.type==="savings_deposit"?"-":""}{fmt(num(l.amount))}
                     </div>
                     {l.type==="void" && <div style={{fontSize:9,fontWeight:600,color:C.muted,marginTop:2}}>dibatalkan</div>}
